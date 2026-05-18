@@ -1,54 +1,95 @@
 use anyhow::Result;
-use std::time::Instant;
-use tokio::sync::mpsc;
-use walkdir::WalkDir;
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::Instant,
+};
+use tokio::{
+    fs,
+    sync::{mpsc, Mutex},
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let start = Instant::now();
 
-    let (tx, mut rx) = mpsc::channel(1000);
-
     let scan_path = std::env::args()
-    .nth(1)
-    .unwrap_or(".".to_string());
+        .nth(1)
+        .unwrap_or(".".to_string());
 
-    tokio::spawn(async move {
-        for entry in WalkDir::new(scan_path)
-            .into_iter()
-            .filter_entry(|e| {
-                let file_name = e.file_name().to_string_lossy();
+    // Directory queue
+    let dir_queue = Arc::new(
+        Mutex::new(vec![PathBuf::from(scan_path)])
+    );
 
-                // Skip hidden files/folders
-                if file_name.starts_with('.') {
-                    return false;
-                }
+    // File results channel
+    let (tx, mut rx) = mpsc::channel::<String>(10000);
 
-                // Skip .git explicitly
-                if file_name == ".git" {
-                    return false;
-                }
+    let worker_count = num_cpus::get();
 
-                true
-            })
-        {
-            match entry {
-                Ok(entry) => {
-                    // Count only files
-                    if entry.file_type().is_file() {
-                        let path = entry.path().display().to_string();
+    println!("Starting {} workers...\n", worker_count);
 
-                        if tx.send(path).await.is_err() {
-                            break;
+    let mut handles = vec![];
+
+    for _ in 0..worker_count {
+        let dir_queue = Arc::clone(&dir_queue);
+        let tx = tx.clone();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                // Get next directory
+                let dir = {
+                    let mut queue = dir_queue.lock().await;
+
+                    queue.pop()
+                };
+
+                let dir = match dir {
+                    Some(d) => d,
+                    None => break,
+                };
+
+                // Read directory
+                let mut entries = match fs::read_dir(&dir).await {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+
+                    let file_name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+
+                    // Skip hidden files/folders
+                    if file_name.starts_with('.') {
+                        continue;
+                    }
+
+                    match entry.file_type().await {
+                        Ok(file_type) => {
+                            if file_type.is_dir() {
+                                // Push subdirectory into queue
+                                let mut queue = dir_queue.lock().await;
+                                queue.push(path);
+                            } else if file_type.is_file() {
+                                let _ = tx
+                                    .send(path.display().to_string())
+                                    .await;
+                            }
                         }
+                        Err(_) => continue,
                     }
                 }
-                Err(err) => {
-                    eprintln!("Error: {}", err);
-                }
             }
-        }
-    });
+        });
+
+        handles.push(handle);
+    }
+
+    drop(tx);
 
     let mut total_files = 0;
 
@@ -58,8 +99,12 @@ async fn main() -> Result<()> {
         println!("{}", path);
     }
 
+    for handle in handles {
+        let _ = handle.await;
+    }
+
     println!("\nTotal files: {}", total_files);
-    println!("Scan completed in: {:?}", start.elapsed());
+    println!("Completed in: {:?}", start.elapsed());
 
     Ok(())
 }
