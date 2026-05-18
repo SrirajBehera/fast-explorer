@@ -12,6 +12,8 @@ use tokio::{
     sync::{Notify, mpsc},
 };
 
+const FILE_CHANNEL_CAP: usize = 8_192;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let start = Instant::now();
@@ -21,18 +23,21 @@ async fn main() -> Result<()> {
 
     println!("Starting {} workers...\n", worker_count);
 
+    // Dir channel is unbounded — workers are BOTH producers and consumers
+    // of this channel. A bounded dir channel deadlocks when all workers
+    // block on send() simultaneously with nobody left to call recv().
     let (dir_tx, dir_rx) = async_channel::unbounded::<PathBuf>();
-    let (file_tx, mut file_rx) = mpsc::unbounded_channel::<String>();
 
-    // Counts dirs that are queued OR actively being processed.
-    // Only when this hits 0 is the scan truly complete.
+    // File channel CAN be bounded — the file consumer (main thread) is
+    // independent of workers, so backpressure here is safe.
+    let (file_tx, mut file_rx) = mpsc::channel::<String>(FILE_CHANNEL_CAP);
+
+    // Tracks dirs that are queued OR actively being processed.
+    // Incremented before send, decremented after fully processed.
+    // When it hits 0, the scan is truly complete.
     let in_flight = Arc::new(AtomicI64::new(0));
-
-    // Notified every time in_flight is decremented, so the shutdown
-    // watcher wakes up and can check if we're done.
     let notify = Arc::new(Notify::new());
 
-    // Seed the first directory
     in_flight.fetch_add(1, Ordering::SeqCst);
     dir_tx.send(PathBuf::from(&scan_path)).await?;
 
@@ -50,7 +55,6 @@ async fn main() -> Result<()> {
                 let mut entries = match fs::read_dir(&dir).await {
                     Ok(e) => e,
                     Err(_) => {
-                        // This dir failed — still must decrement and notify
                         in_flight.fetch_sub(1, Ordering::SeqCst);
                         notify.notify_one();
                         continue;
@@ -67,38 +71,46 @@ async fn main() -> Result<()> {
 
                     match entry.file_type().await {
                         Ok(ft) if ft.is_dir() => {
-                            // Increment BEFORE sending — guarantees the counter
-                            // is already correct before any worker can pick it up
+                            // Increment BEFORE send — counter must be correct
+                            // before any other worker can pick it up and finish it
                             in_flight.fetch_add(1, Ordering::SeqCst);
-                            let _ = dir_tx.send(path).await;
+
+                            // Unbounded send — never blocks, never deadlocks
+                            if dir_tx.send(path).await.is_err() {
+                                // Channel closed during shutdown — undo increment
+                                in_flight.fetch_sub(1, Ordering::SeqCst);
+                                notify.notify_one();
+                            }
                         }
                         Ok(ft) if ft.is_file() => {
-                            let _ = file_tx.send(path.display().to_string());
+                            // Bounded send — safe because main thread (file consumer)
+                            // is independent and always draining.
+                            // If main thread is slow, workers slow down here — that
+                            // is intentional backpressure on the output side only.
+                            let _ = file_tx.send(path.display().to_string()).await;
                         }
                         _ => {}
                     }
                 }
 
-                // Done processing this dir
+                // This dir is fully processed
                 in_flight.fetch_sub(1, Ordering::SeqCst);
                 notify.notify_one();
             }
         }));
     }
 
-    // Shutdown watcher — waits until in_flight truly hits 0, then
-    // closes the dir channel so all workers exit their recv() loop.
+    // Watcher: the only place that closes the dir channel.
+    // Wakes on every notify, checks if truly done, closes channel if so.
     let watcher = {
         let in_flight = Arc::clone(&in_flight);
         let notify = Arc::clone(&notify);
-        let dir_tx = dir_tx.clone(); // keep channel open until we decide to close it
+        let dir_tx = dir_tx.clone();
 
         tokio::spawn(async move {
             loop {
                 notify.notified().await;
                 if in_flight.load(Ordering::SeqCst) == 0 {
-                    // Closing the last sender closes the channel,
-                    // making all dir_rx.recv() calls return Err → workers exit
                     dir_tx.close();
                     break;
                 }
@@ -106,11 +118,11 @@ async fn main() -> Result<()> {
         })
     };
 
-    drop(dir_tx); // main thread's clone
-    drop(file_tx); // when workers exit they drop theirs; this drops main's
+    drop(dir_tx);
+    drop(file_tx);
 
     let mut total_files = 0;
-    while let Some(path) = file_rx.recv().await {
+    while let Some(_path) = file_rx.recv().await {
         total_files += 1;
         // println!("{}", path);
     }
