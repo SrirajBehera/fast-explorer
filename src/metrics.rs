@@ -22,6 +22,12 @@ pub struct Metrics {
 
     /// Total files discovered.
     pub files_found: Arc<AtomicUsize>,
+
+    /// Symlinks encountered and skipped.
+    pub symlinks_skipped: Arc<AtomicUsize>,
+
+    /// Symlink cycles detected and prevented.
+    pub cycles_detected: Arc<AtomicUsize>,
 }
 
 impl Metrics {
@@ -32,6 +38,8 @@ impl Metrics {
             dirs_scanned: Arc::new(AtomicUsize::new(0)),
             dirs_failed: Arc::new(AtomicUsize::new(0)),
             files_found: Arc::new(AtomicUsize::new(0)),
+            symlinks_skipped: Arc::new(AtomicUsize::new(0)),
+            cycles_detected: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -57,6 +65,14 @@ impl Metrics {
         println!(
             "Files found:              {}",
             self.files_found.load(Ordering::SeqCst)
+        );
+        println!(
+            "Symlinks skipped:         {}",
+            self.symlinks_skipped.load(Ordering::SeqCst)
+        );
+        println!(
+            "Cycles detected:          {}",
+            self.cycles_detected.load(Ordering::SeqCst)
         );
     }
 }

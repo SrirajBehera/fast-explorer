@@ -1,5 +1,6 @@
 mod metrics;
 mod scanner;
+mod symlink;
 
 use anyhow::Result;
 use std::time::Instant;

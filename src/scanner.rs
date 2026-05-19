@@ -8,6 +8,7 @@ use tokio::{
 };
 
 use crate::metrics::Metrics;
+use crate::symlink::{SymlinkGuard, SymlinkStatus};
 
 const FILE_CHANNEL_CAP: usize = 8_192;
 
@@ -24,6 +25,10 @@ pub async fn run(scan_path: String, worker_count: usize, metrics: Metrics) -> Re
     // Watcher signals workers to stop once in_flight hits 0
     let notify = Arc::new(Notify::new());
 
+    // Shared symlink guard — tracks visited inodes across all workers.
+    // Prevents both symlink loops (A→B→A) and redundant traversal.
+    let symlink_guard = SymlinkGuard::new();
+
     // Seed the root directory
     metrics.in_flight.fetch_add(1, Ordering::SeqCst);
     metrics.update_peak();
@@ -37,6 +42,7 @@ pub async fn run(scan_path: String, worker_count: usize, metrics: Metrics) -> Re
         let file_tx = file_tx.clone();
         let metrics = metrics.clone();
         let notify = Arc::clone(&notify);
+        let symlink_guard = symlink_guard.clone();
 
         handles.push(tokio::spawn(async move {
             while let Ok(dir) = dir_rx.recv().await {
@@ -59,16 +65,35 @@ pub async fn run(scan_path: String, worker_count: usize, metrics: Metrics) -> Re
                     }
 
                     match entry.file_type().await {
+                        Ok(ft) if ft.is_symlink() => {
+                            // Symlink as reported by the OS — skip entirely.
+                            // This catches the common case cheaply without stat.
+                            metrics.symlinks_skipped.fetch_add(1, Ordering::SeqCst);
+                        }
                         Ok(ft) if ft.is_dir() => {
-                            // Increment BEFORE send — counter must be correct
-                            // before any worker can pick it up and finish it
-                            metrics.in_flight.fetch_add(1, Ordering::SeqCst);
-                            metrics.update_peak();
+                            // Deep check: verify inode hasn't been visited before.
+                            // Catches cycles that don't show as symlinks at this
+                            // level (e.g. bind mounts, hardlinked dirs on some FSes).
+                            match symlink_guard.check_and_mark(&path).await {
+                                SymlinkStatus::Safe => {
+                                    // Increment BEFORE send — counter must be correct
+                                    // before any worker can pick it up and finish it
+                                    metrics.in_flight.fetch_add(1, Ordering::SeqCst);
+                                    metrics.update_peak();
 
-                            if dir_tx.send(path).await.is_err() {
-                                // Channel closed during shutdown — undo increment
-                                metrics.in_flight.fetch_sub(1, Ordering::SeqCst);
-                                notify.notify_one();
+                                    if dir_tx.send(path).await.is_err() {
+                                        // Channel closed during shutdown — undo increment
+                                        metrics.in_flight.fetch_sub(1, Ordering::SeqCst);
+                                        notify.notify_one();
+                                    }
+                                }
+                                SymlinkStatus::IsSymlink => {
+                                    metrics.symlinks_skipped.fetch_add(1, Ordering::SeqCst);
+                                }
+                                SymlinkStatus::Cycle => {
+                                    metrics.cycles_detected.fetch_add(1, Ordering::SeqCst);
+                                }
+                                SymlinkStatus::Error => {}
                             }
                         }
                         Ok(ft) if ft.is_file() => {
