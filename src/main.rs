@@ -1,4 +1,5 @@
 mod metrics;
+mod reporter;
 mod scanner;
 mod symlink;
 
@@ -15,7 +16,16 @@ async fn main() -> Result<()> {
     println!("Starting {} workers...\n", worker_count);
 
     let metrics = metrics::Metrics::new();
+
+    // Start live throughput reporter — prints files/sec to stderr every second.
+    // Kept on stderr so stdout (file paths) stays clean for piping.
+    // Dropping `reporter` stops it cleanly before final results print.
+    let reporter = reporter::spawn(metrics.files_found.clone());
+
     let total_files = scanner::run(scan_path, worker_count, metrics.clone()).await?;
+
+    // Stop reporter before printing final results — prevents interleaving
+    reporter.stop();
 
     let elapsed = start.elapsed();
 
