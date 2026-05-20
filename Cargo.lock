@@ -105,6 +105,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "dashmap",
+ "libc",
  "num_cpus",
  "tokio",
  "tokio-util",

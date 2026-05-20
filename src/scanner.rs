@@ -18,21 +18,12 @@ pub async fn run(
     metrics: Metrics,
     cancel: CancellationToken,
 ) -> Result<usize> {
-    // Dir channel: unbounded — workers are both producers and consumers.
-    // A bounded dir channel would deadlock when all workers block on send()
-    // simultaneously with nobody left to call recv().
     let (dir_tx, dir_rx) = async_channel::unbounded::<PathBuf>();
-
-    // File channel: bounded batches — main thread is an independent consumer,
-    // so backpressure here is safe and keeps memory flat.
     let (file_tx, mut file_rx) = mpsc::channel::<Vec<String>>(FILE_CHANNEL_CAP);
 
     let notify = Arc::new(Notify::new());
     let symlink_guard = SymlinkGuard::new();
 
-    // Seed the root directory.
-    // Release: any worker that picks this up and loads in_flight > 0 will
-    // observe our increment via its Acquire load in the watcher.
     metrics.in_flight.fetch_add(1, Ordering::Release);
     metrics.update_peak();
     dir_tx.send(PathBuf::from(&scan_path)).await?;
@@ -49,44 +40,38 @@ pub async fn run(
         let cancel = cancel.clone();
 
         handles.push(tokio::spawn(async move {
-            // ── Per-worker allocations: done ONCE, reused every directory ──────
+            // Per-worker allocations — done once, reused across every directory.
             //
-            // scratch_buf   : passed into read_dir_entries as working memory
-            //                 (currently unused by std::fs::read_dir, kept for
-            //                  future getattrlistbulk/getdents64 fast path)
+            // scratch_buf  : 256KB buffer passed into getdirentries64 via read_dir_entries.
+            //                Allocated once per worker; the blocking closure receives it
+            //                via std::mem::take and returns it so it can be reused.
             //
-            // path_scratch  : reusable String for building full file paths.
-            //                 Old code: dir.join(name).display().to_string()
-            //                   → allocates a PathBuf AND a String per file
-            //                   → 3.08 M heap allocs for 1.54 M files
-            //                 New code: push dir_str + '/' + name into scratch,
-            //                 then .clone() only for the batch entry
-            //                   → 1 alloc per file (the clone), 50% fewer allocs
+            // path_scratch : reusable String for building full file paths.
+            //                Avoids the PathBuf+String double allocation from
+            //                dir.join(&name).display().to_string().
             //
-            // file_batch    : Vec flushed every FILE_BATCH_SIZE entries to cut
-            //                 channel send overhead 256×.
+            // file_batch   : Vec flushed every FILE_BATCH_SIZE to cut channel sends.
             let mut scratch_buf = platform::new_scratch_buf();
             let mut path_scratch = String::with_capacity(512);
             let mut file_batch = Vec::<String>::with_capacity(FILE_BATCH_SIZE);
 
             loop {
-                // Interleave cancellation check with directory receive.
-                // `biased` ensures the cancellation branch is polled first —
-                // once cancelled we stop taking new work immediately.
                 let dir = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => break,
                     res = dir_rx.recv() => match res {
                         Ok(dir) => dir,
-                        Err(_)  => break,  // channel closed — normal shutdown
+                        Err(_)  => break,
                     },
                 };
 
-                // ── Offload blocking read_dir to the blocking thread pool ──────
-                // std::fs::read_dir is a synchronous syscall.  Calling it directly
-                // on an async executor thread stalls the entire runtime; every other
-                // task on that thread waits.  spawn_blocking dispatches to a
-                // separate thread pool sized for blocking work.
+                // Offload blocking read_dir_entries to tokio's shared blocking pool.
+                //
+                // Why spawn_blocking over a dedicated thread per worker?
+                // tokio's pool is *shared* — if one async worker's dir queue is
+                // momentarily empty, its slot in the pool serves another worker's
+                // directories.  A 1:1 dedicated thread wastes a thread when its
+                // paired async worker has no work, serializing the pool.
                 let mut buf = std::mem::take(&mut scratch_buf);
                 let dir_for_read = dir.clone();
                 let read_result = tokio::task::spawn_blocking(move || {
@@ -99,7 +84,6 @@ pub async fn run(
                 let (result, returned_buf, entries_buf) = match read_result {
                     Ok(triple) => triple,
                     Err(_) => {
-                        // spawn_blocking task panicked — treat as failed dir.
                         metrics.dirs_failed.fetch_add(1, Ordering::Relaxed);
                         metrics.in_flight.fetch_sub(1, Ordering::Release);
                         notify.notify_one();
@@ -115,10 +99,8 @@ pub async fn run(
                     continue;
                 }
 
-                // ── Pre-compute dir string once per directory ──────────────────
-                // Converting PathBuf → &str is zero-copy on valid UTF-8 (Cow::Borrowed).
-                // Doing it outside the per-entry loop avoids repeating the conversion
-                // for every file in the directory.
+                // Compute dir string once per directory — zero-copy Cow<str>
+                // on valid UTF-8 (APFS always produces valid UTF-8 names).
                 let dir_str = dir.to_string_lossy();
                 let dir_str = dir_str.as_ref();
                 let needs_sep = !dir_str.ends_with('/');
@@ -138,16 +120,11 @@ pub async fn run(
                                 metrics.cycles_detected.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
-
-                            // Increment BEFORE send — the counter must reflect
-                            // queued-but-not-yet-started work before any worker
-                            // can pick it up, finish it, and signal in_flight == 0.
                             metrics.in_flight.fetch_add(1, Ordering::Release);
                             metrics.update_peak();
 
                             let path = dir.join(&entry.name);
                             if dir_tx.send(path).await.is_err() {
-                                // Channel closed during shutdown — undo the increment.
                                 metrics.in_flight.fetch_sub(1, Ordering::Release);
                                 notify.notify_one();
                             }
@@ -156,9 +133,6 @@ pub async fn run(
                         EntryType::File => {
                             metrics.files_found.fetch_add(1, Ordering::Relaxed);
 
-                            // Build full path string without an intermediate PathBuf.
-                            // push_str into a reused scratch buffer, then clone only
-                            // the final string for the batch — one allocation per file.
                             path_scratch.clear();
                             path_scratch.push_str(dir_str);
                             if needs_sep {
@@ -181,26 +155,21 @@ pub async fn run(
                 }
 
                 metrics.dirs_scanned.fetch_add(1, Ordering::Relaxed);
-                // Release: the watcher's Acquire load of in_flight after notified()
-                // is guaranteed to see this decrement.
                 metrics.in_flight.fetch_sub(1, Ordering::Release);
                 notify.notify_one();
             }
 
-            // Flush any remaining file paths before the worker exits.
             if !file_batch.is_empty() {
                 let _ = file_tx.send(file_batch).await;
             }
         }));
     }
 
-    // Watcher: closes the dir channel only when in_flight truly hits 0.
-    // Acquire pairs with the workers' Release on fetch_sub — we are guaranteed
-    // to observe the final decrement before deciding to shut down.
+    // Watcher: closes dir channel when in_flight hits 0.
+    // Acquire pairs with workers' Release fetch_sub.
     let watcher = {
         let in_flight = Arc::clone(&metrics.in_flight) as Arc<AtomicI64>;
         let dir_tx = dir_tx.clone();
-
         tokio::spawn(async move {
             loop {
                 notify.notified().await;
@@ -215,12 +184,11 @@ pub async fn run(
     drop(dir_tx);
     drop(file_tx);
 
-    // Drain file batches — count total and optionally print paths.
     let mut total_files = 0usize;
     while let Some(batch) = file_rx.recv().await {
         for _path in &batch {
             total_files += 1;
-            // println!("{}", _path);   // uncomment to stream paths to stdout
+            // println!("{}", _path);
         }
     }
 
