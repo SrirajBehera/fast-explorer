@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-walkdir = "2"
-anyhow = "1"
-num_cpus = "1"
+tokio     = { version = "1", features = ["full"] }
+anyhow    = "1"
+num_cpus  = "1"
 async-channel = "2"
+dashmap   = "6"                          # sharded concurrent set — replaces Mutex<HashSet>
+tokio-util = { version = "0.7" }        # CancellationToken for clean scan abort
 
 [profile.release]
 opt-level     = 3
