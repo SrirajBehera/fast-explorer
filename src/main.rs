@@ -1,4 +1,5 @@
 mod metrics;
+mod platform;
 mod reporter;
 mod scanner;
 mod symlink;

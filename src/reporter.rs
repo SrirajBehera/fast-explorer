@@ -51,7 +51,7 @@ pub fn spawn(files_found: Arc<AtomicUsize>) -> ShutdownTx {
 }
 
 /// Handle returned to the caller. Drop or call `.stop()` to shut down reporter.
-pub struct ShutdownTx(watch::Sender<()>);
+pub struct ShutdownTx(#[allow(dead_code)] watch::Sender<()>);
 
 impl ShutdownTx {
     /// Explicitly stop the reporter. Equivalent to dropping the handle.

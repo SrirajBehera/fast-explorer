@@ -9,3 +9,9 @@ walkdir = "2"
 anyhow = "1"
 num_cpus = "1"
 async-channel = "2"
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"     # link-time optimisation — measurable on hot loops
+codegen-units = 1          # single CGU = better inlining across modules
+strip         = "symbols"  # smaller binary, faster load
