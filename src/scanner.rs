@@ -46,12 +46,16 @@ pub async fn run(
             //                Allocated once per worker; the blocking closure receives it
             //                via std::mem::take and returns it so it can be reused.
             //
+            // entries_buf  : Reusable Vec to store DirEntry structs.
+            //                Reusing this prevents 165K Vec allocations per scan.
+            //
             // path_scratch : reusable String for building full file paths.
             //                Avoids the PathBuf+String double allocation from
             //                dir.join(&name).display().to_string().
             //
             // file_batch   : Vec flushed every FILE_BATCH_SIZE to cut channel sends.
             let mut scratch_buf = platform::new_scratch_buf();
+            let mut entries_buf = Vec::<platform::DirEntry>::with_capacity(128);
             let mut path_scratch = String::with_capacity(512);
             let mut file_batch = Vec::<String>::with_capacity(FILE_BATCH_SIZE);
 
@@ -66,22 +70,16 @@ pub async fn run(
                 };
 
                 // Offload blocking read_dir_entries to tokio's shared blocking pool.
-                //
-                // Why spawn_blocking over a dedicated thread per worker?
-                // tokio's pool is *shared* — if one async worker's dir queue is
-                // momentarily empty, its slot in the pool serves another worker's
-                // directories.  A 1:1 dedicated thread wastes a thread when its
-                // paired async worker has no work, serializing the pool.
                 let mut buf = std::mem::take(&mut scratch_buf);
+                let mut entries = std::mem::take(&mut entries_buf);
                 let dir_for_read = dir.clone();
                 let read_result = tokio::task::spawn_blocking(move || {
-                    let mut entries = Vec::<platform::DirEntry>::with_capacity(128);
                     let result = platform::read_dir_entries(&dir_for_read, &mut buf, &mut entries);
                     (result, buf, entries)
                 })
                 .await;
 
-                let (result, returned_buf, entries_buf) = match read_result {
+                let (result, returned_buf, returned_entries) = match read_result {
                     Ok(triple) => triple,
                     Err(_) => {
                         metrics.dirs_failed.fetch_add(1, Ordering::Relaxed);
@@ -91,6 +89,7 @@ pub async fn run(
                     }
                 };
                 scratch_buf = returned_buf;
+                entries_buf = returned_entries;
 
                 if result.is_err() {
                     metrics.dirs_failed.fetch_add(1, Ordering::Relaxed);

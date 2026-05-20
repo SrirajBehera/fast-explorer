@@ -8,9 +8,10 @@ tokio      = { version = "1", features = ["full"] }
 anyhow     = "1"
 num_cpus   = "1"
 async-channel = "2"
-dashmap    = "6"           # sharded concurrent set — replaces Mutex<HashSet>
-tokio-util = { version = "0.7" }   # CancellationToken
-libc       = "0.2"         # raw getdirentries64 syscall (macOS fast path)
+dashmap    = "6"
+tokio-util = { version = "0.7" }
+libc       = "0.2"
+compact_str = "0.8"  # inline storage for strings ≤24 bytes — eliminates most name heap allocs
 
 [profile.release]
 opt-level     = 3

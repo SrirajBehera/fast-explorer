@@ -1,3 +1,4 @@
+use compact_str::CompactString;
 /// Fallback directory reader for Linux and other Unix platforms.
 ///
 /// Uses std::fs::read_dir which calls getdents64 under the hood.
@@ -12,12 +13,11 @@ use std::{fs, path::Path};
 
 use super::{DirEntry, EntryType};
 
-pub fn read_dir_entries(dir: &Path) -> std::io::Result<Vec<DirEntry>> {
+pub fn read_dir_entries(dir: &Path, out: &mut Vec<DirEntry>) -> std::io::Result<()> {
     let read_dir = fs::read_dir(dir)?;
-    let mut entries = Vec::with_capacity(64);
 
     for entry in read_dir.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = CompactString::new(entry.file_name().to_string_lossy());
 
         // file_type() on Linux uses the d_type field already in the
         // getdents64 result — no extra fstatat syscall for most filesystems.
@@ -45,12 +45,12 @@ pub fn read_dir_entries(dir: &Path) -> std::io::Result<Vec<DirEntry>> {
             })
             .unwrap_or(0);
 
-        entries.push(DirEntry {
+        out.push(DirEntry {
             name,
             entry_type,
             inode,
         });
     }
 
-    Ok(entries)
+    Ok(())
 }

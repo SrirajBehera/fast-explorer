@@ -23,6 +23,7 @@
 ///   offset 21 ..    : char d_name[]  (null-terminated, d_namlen bytes + '\0')
 use std::{ffi::CString, os::unix::ffi::OsStrExt, path::Path};
 
+use compact_str::CompactString;
 use libc::{O_DIRECTORY, O_RDONLY, c_char, c_int, close, open};
 
 use super::{DirEntry, EntryType};
@@ -116,10 +117,9 @@ fn parse_dirents(buf: &[u8], out: &mut Vec<DirEntry>) {
 
             // Skip the mandatory "." and ".." entries.
             if name_bytes != b"." && name_bytes != b".." {
-                let name = match std::str::from_utf8(name_bytes) {
-                    Ok(s) => s.to_owned(),
-                    Err(_) => String::from_utf8_lossy(name_bytes).into_owned(),
-                };
+                // CompactString::from_utf8_lossy inlines strings ≤ 24 bytes —
+                // no heap allocation for filenames that fit (covers ~95% of names).
+                let name = CompactString::from_utf8_lossy(name_bytes);
 
                 let entry_type = match d_type {
                     DT_REG => EntryType::File,

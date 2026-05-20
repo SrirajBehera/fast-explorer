@@ -4,11 +4,22 @@ mod macos;
 #[cfg(not(target_os = "macos"))]
 mod fallback;
 
+use compact_str::CompactString;
+
 /// Unified directory entry — same shape on all platforms.
+///
+/// ## Why CompactString instead of String?
+///
+/// On APFS the average filename is ~15 characters.  `CompactString` stores
+/// strings up to 24 bytes inline (on the stack / in the struct) without any
+/// heap allocation.  For a scan of 1.54M files + 165K dirs that eliminates
+/// roughly 1.5M of the 1.7M name heap allocations — all the short names.
+/// Longer names (> 24 bytes) fall back to a heap allocation exactly like String.
+/// The API is identical to String via Deref<Target = str>.
 #[derive(Debug)]
 pub struct DirEntry {
-    /// Entry name only, not full path — avoids per-entry PathBuf allocation.
-    pub name: String,
+    /// Entry name only — no full path, avoids per-entry PathBuf allocation.
+    pub name: CompactString,
     pub entry_type: EntryType,
     /// Inode — used by SymlinkGuard for cycle detection at zero extra cost.
     pub inode: u64,
@@ -24,14 +35,9 @@ pub enum EntryType {
 
 /// Read all entries in `dir` into `out`, reusing `buf` as a scratch buffer.
 ///
-/// `out` is cleared on each call. `buf` is never reallocated — allocate
-/// it once per worker with `new_scratch_buf()` and pass it in every call.
-///
-/// Platform behaviour:
-///   macOS : std::fs::read_dir — benchmarked faster than getattrlistbulk
-///           on shallow dirs (avg 9 entries). getattrlistbulk only wins
-///           at 500+ entries/dir which this workload never reaches.
-///   Linux : std::fs::read_dir — getdents64 with cached d_type, no fstatat.
+/// `out` is cleared on each call.  Allocate `buf` once per worker with
+/// `new_scratch_buf()` and `out` with reasonable capacity; pass both in on
+/// every call so no allocations happen inside the hot loop.
 pub fn read_dir_entries(
     dir: &std::path::Path,
     buf: &mut Vec<u8>,
@@ -46,10 +52,8 @@ pub fn read_dir_entries(
     return fallback::read_dir_entries(dir, out);
 }
 
-/// Allocate a scratch buffer once per worker — passed into read_dir_entries
-/// every call so no allocation happens inside the hot loop.
-/// Size is kept at 256KB to match a typical getattrlistbulk buffer,
-/// in case we re-enable it for large-dir workloads later.
+/// Allocate a scratch buffer once per worker.
+/// 256 KB matches the getdirentries64 read size — one syscall fills it.
 pub fn new_scratch_buf() -> Vec<u8> {
     vec![0u8; 256 * 1024]
 }
