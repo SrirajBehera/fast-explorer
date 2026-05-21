@@ -13,6 +13,7 @@ tokio-util = { version = "0.7" }
 libc       = "0.2"
 compact_str = "0.8"  # inline storage for strings ≤24 bytes
 rusqlite   = { version = "0.31", features = ["bundled"] } # SQLite index engine
+notify     = "6.1"   # Live filesystem events (FSEvents/inotify)
 
 [profile.release]
 opt-level     = 3

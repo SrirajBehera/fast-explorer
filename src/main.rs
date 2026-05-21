@@ -4,6 +4,7 @@ mod platform;
 mod scanner;
 mod symlink;
 mod telemetry;
+mod watcher;
 
 use anyhow::Result;
 use compact_str::CompactString;
@@ -41,13 +42,19 @@ async fn main() -> Result<()> {
     // Dropping `reporter` stops it cleanly before final results print.
     let reporter = telemetry::reporter::spawn(metrics.files_found.clone());
 
+    // Initialize DB FIRST so schema exists before watcher tries to insert
+    let db_path = "fex.db";
+    let mut database = db::Db::new(db_path)?;
+
+    // Start the live filesystem watcher BEFORE the scanner.
+    // If we start it after, we might miss files created during the 4 seconds the scanner runs.
+    if let Err(e) = watcher::start_watcher(&scan_path, db_path.to_string()).await {
+        eprintln!("Warning: Failed to start live watcher: {}", e);
+    }
+
     // Stat the root directory to get its inode
     let root_metadata = std::fs::metadata(&scan_path)?;
     let root_inode = root_metadata.ino();
-
-    // Initialize DB
-    let db_path = "fex.db";
-    let mut database = db::Db::new(db_path)?;
 
     // Insert the root directory itself into the DB so recursive queries have a starting point
     // Using 0 as parent_inode for the root
