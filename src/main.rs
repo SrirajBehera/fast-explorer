@@ -1,11 +1,14 @@
-mod metrics;
+mod db;
+mod models;
 mod platform;
-mod reporter;
 mod scanner;
 mod symlink;
+mod telemetry;
 
 use anyhow::Result;
-use std::time::Instant;
+use compact_str::CompactString;
+use models::FileRecord;
+use std::{os::unix::fs::MetadataExt, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -17,7 +20,7 @@ async fn main() -> Result<()> {
 
     println!("Starting {} workers...\n", worker_count);
 
-    let metrics = metrics::Metrics::new();
+    let metrics = telemetry::Metrics::new();
 
     // Cancellation token — shared between the Ctrl-C handler and the scanner.
     // Dropping or calling .cancel() on any clone propagates to all clones.
@@ -36,9 +39,34 @@ async fn main() -> Result<()> {
     // Start live throughput reporter — prints files/sec to stderr every second.
     // Kept on stderr so stdout (file paths) stays clean for piping.
     // Dropping `reporter` stops it cleanly before final results print.
-    let reporter = reporter::spawn(metrics.files_found.clone());
+    let reporter = telemetry::reporter::spawn(metrics.files_found.clone());
 
-    let total_files = scanner::run(scan_path, worker_count, metrics.clone(), cancel).await?;
+    // Stat the root directory to get its inode
+    let root_metadata = std::fs::metadata(&scan_path)?;
+    let root_inode = root_metadata.ino();
+
+    // Initialize DB
+    let db_path = "fex.db";
+    let mut database = db::Db::new(db_path)?;
+
+    // Insert the root directory itself into the DB so recursive queries have a starting point
+    // Using 0 as parent_inode for the root
+    database.insert_batch(&[FileRecord {
+        inode: root_inode,
+        parent_inode: 0,
+        name: CompactString::new(scan_path.clone()),
+        is_dir: true,
+    }])?;
+
+    let total_files = scanner::run(
+        scan_path,
+        root_inode,
+        worker_count,
+        metrics.clone(),
+        cancel,
+        database,
+    )
+    .await?;
 
     // Stop reporter before printing final results — prevents interleaving.
     reporter.stop();
