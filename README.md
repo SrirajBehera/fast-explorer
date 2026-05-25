@@ -62,7 +62,7 @@ The application provides two core modes:
 
 Check out the full capabilities and real-time sub-5ms fuzzy search of Fast Explorer in action:
 
-🚀 **[Watch the Fast Explorer Product Demo on Google Drive](https://drive.google.com/file/d/1AyM5UyOqGrB-x2nK_d9j7YXuwgTgBvsX/view?usp=sharing)**
+🚀 **<a href="https://drive.google.com/file/d/1AyM5UyOqGrB-x2nK_d9j7YXuwgTgBvsX/view?usp=sharing" target="_blank" rel="noopener noreferrer">Watch the Fast Explorer Product Demo on Google Drive</a>**
 
 ---
 
