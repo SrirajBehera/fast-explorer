@@ -65,6 +65,20 @@ pub async fn worker_loop(
                 continue;
             }
 
+            // Exclude noise and system directories from indexing
+            let name_str = entry.name.as_str();
+            if entry.entry_type == EntryType::Dir {
+                if name_str == "node_modules"
+                    || name_str == "Library"
+                    || name_str == "target"
+                    || name_str == "dist"
+                    || name_str == "build"
+                    || name_str == "bower_components"
+                {
+                    continue;
+                }
+            }
+
             match entry.entry_type {
                 EntryType::Symlink => {
                     metrics.symlinks_skipped.fetch_add(1, Ordering::Relaxed);

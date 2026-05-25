@@ -64,6 +64,7 @@ impl Metrics {
         self.peak_in_flight.fetch_max(current, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)]
     pub fn print(&self) {
         println!(
             "Peak dirs in-flight:      {}",
