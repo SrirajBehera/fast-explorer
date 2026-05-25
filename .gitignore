@@ -42,6 +42,12 @@ src-tauri/fex.db
 src-tauri/fex.db-shm
 src-tauri/fex.db-wal
 
+# ── Stale Root-Level Rust Artifacts (Tauri backend lives in src-tauri/) ───────
+# These can appear from early scaffolding — the real manifests are in src-tauri/
+/Cargo.toml
+/Cargo.lock
+/scratch.rs
+
 # ── Scratch / Temp Files ──────────────────────────────────────────────────────
 scratch.rs
 scratch.*
