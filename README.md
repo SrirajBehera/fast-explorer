@@ -26,37 +26,30 @@ The application provides two core modes:
 
 ## 📸 Screenshots
 
-Here is a visual tour of Fast Explorer. To display these screenshots, place your 5 PNG images into the `docs/screenshots/` folder with the following filenames:
-
-1. `search_mode.png` — The elegant, glassmorphic search interface showing instant results.
-2. `browse_mode.png` — The 3-column native-feeling file browser layout.
-3. `command_palette.png` — The robust `/` launcher and shortcut center.
-4. `settings_shortcuts.png` — In-app settings panel and keyboard helper.
-5. `search_metrics.png` — The status bar showing sub-5ms search time metrics.
-
-<div align="center">
-  <img src="docs/screenshots/search_mode.png" alt="Search Mode" width="800px" style="border-radius: 8px; margin-bottom: 15px;" />
-  
+<div align="center" margin-bottom="15px">
+  <img src="docs/screenshots/landing.png" alt="Search Mode" width="800px" style="border-radius: 8px; " />
+  <em>Landing Page</em>
+  <div margin-bottom="15px"></div>
   <br />
   
   <table width="100%">
     <tr>
       <td width="50%" align="center">
-        <img src="docs/screenshots/browse_mode.png" alt="Browse Mode" width="100%" style="border-radius: 8px;" /><br/>
+        <img src="docs/screenshots/file_explorer.png" alt="Browse Mode" width="100%" style="border-radius: 8px;" /><br/>
         <em>Browse Mode (3-Column Layout)</em>
       </td>
       <td width="50%" align="center">
-        <img src="docs/screenshots/command_palette.png" alt="Command Palette" width="100%" style="border-radius: 8px;" /><br/>
+        <img src="docs/screenshots/commands.png" alt="Command Palette" width="100%" style="border-radius: 8px;" /><br/>
         <em>Command Palette</em>
       </td>
     </tr>
     <tr>
       <td width="50%" align="center">
-        <img src="docs/screenshots/settings_shortcuts.png" alt="Settings & Shortcuts" width="100%" style="border-radius: 8px;" /><br/>
+        <img src="docs/screenshots/settings.png" alt="Settings & Shortcuts" width="100%" style="border-radius: 8px;" /><br/>
         <em>Settings & Shortcuts</em>
       </td>
       <td width="50%" align="center">
-        <img src="docs/screenshots/search_metrics.png" alt="Search Latency Metrics" width="100%" style="border-radius: 8px;" /><br/>
+        <img src="docs/screenshots/search_mode.png" alt="Search Latency Metrics" width="100%" style="border-radius: 8px;" /><br/>
         <em>Performance Latency Metrics</em>
       </td>
     </tr>
@@ -69,7 +62,7 @@ Here is a visual tour of Fast Explorer. To display these screenshots, place your
 
 Check out the full capabilities and real-time sub-5ms fuzzy search of Fast Explorer in action:
 
-🚀 **[Watch the Fast Explorer Product Demo on Google Drive](https://drive.google.com/file/d/1tL3X9QY_YOUR_GDRIVE_LINK_HERE/view?usp=sharing)** *(Replace with your actual link if needed)*
+🚀 **[Watch the Fast Explorer Product Demo on Google Drive](https://drive.google.com/file/d/1AyM5UyOqGrB-x2nK_d9j7YXuwgTgBvsX/view?usp=sharing)**
 
 ---
 
